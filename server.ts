@@ -173,7 +173,12 @@ async function bootstrap() {
 
   // --- Health ---
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, wsClients: wsHub.getClientCount() });
+    res.json({
+      ok: true,
+      wsClients: wsHub.getClientCount(),
+      storage: store.getStorageMode(),
+      hasDbEnv: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+    });
   });
 
   // --- Uploaded Vehicle Images ---
@@ -1192,6 +1197,7 @@ bootstrapPromise.catch((err) => {
 export default async function handler(req: any, res: any) {
   try {
     await bootstrapPromise;
+    await store.ensureFresh();
     vercelApp(req, res);
   } catch (error) {
     console.error('Vercel handler error:', error);

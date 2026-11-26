@@ -2,6 +2,7 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import pg from 'pg';
 import type {
   AnalyticsEvent,
   AnalyticsSummary,
@@ -29,6 +30,25 @@ export interface DataStore {
   notifications: AppNotification[];
   catalogTrimmedToTen?: boolean;
 }
+
+type StoreSectionKey =
+  | 'users'
+  | 'vehicles'
+  | 'enquiries'
+  | 'siteContent'
+  | 'themeColors'
+  | 'analyticsEvents'
+  | 'notifications';
+
+const STORE_SECTION_KEYS: StoreSectionKey[] = [
+  'users',
+  'vehicles',
+  'enquiries',
+  'siteContent',
+  'themeColors',
+  'analyticsEvents',
+  'notifications',
+];
 
 const SEED_DATA_DIR = path.resolve(process.cwd(), 'data');
 const SEED_STORE_PATH = path.join(SEED_DATA_DIR, 'store.json');
@@ -372,9 +392,275 @@ class StoreManager {
   private activeDataDir = WRITABLE_DATA_DIR;
   private activeStorePath = STORE_PATH;
   private readOnlyMemoryMode = false;
+  private pool: pg.Pool | null = null;
+  private sectionVersions = new Map<StoreSectionKey, number>();
+  private lastDbError: string | null = null;
+  private lastPgRetryAt = 0;
+
+  private normalizeParsedStore(parsed: Partial<DataStore>): { data: DataStore; changed: boolean } {
+    const initial = createInitialStore();
+    const rawContent = parsed.siteContent ? { ...initial.siteContent, ...parsed.siteContent } : initial.siteContent;
+    const needsBrandSync =
+      !parsed.siteContent?.logoUrl ||
+      parsed.siteContent?.contactEmail === 'sales@annamalaiyarcars.in';
+    const syncedContent: SiteContent = needsBrandSync
+      ? {
+          ...rawContent,
+          logoUrl: initial.siteContent.logoUrl,
+          bannerUrl: initial.siteContent.bannerUrl,
+          heroKicker: initial.siteContent.heroKicker,
+          showroomAddress: initial.siteContent.showroomAddress,
+          showroomCity: initial.siteContent.showroomCity,
+          contactPhone: initial.siteContent.contactPhone,
+          contactEmail: initial.siteContent.contactEmail,
+          whatsappNumber: initial.siteContent.whatsappNumber,
+          footerNote: initial.siteContent.footerNote,
+        }
+      : rawContent;
+
+    const existingVehicles = Array.isArray(parsed.vehicles) ? parsed.vehicles : [];
+    const baseVehicles = existingVehicles.length > 0 ? existingVehicles : initial.vehicles;
+    const needsVehicleFieldsUpgrade = baseVehicles.some(
+      (v) =>
+        v.fc === undefined ||
+        v.insurance === undefined ||
+        v.permit === undefined ||
+        v.dealerPrice === undefined ||
+        v.dealerType === undefined ||
+        v.dealerNumber === undefined ||
+        v.dealerPlaces === undefined ||
+        v.notes === undefined ||
+        !VALID_DEALER_TYPES.includes(v.dealerType) ||
+        (v.boardType !== 'Tboard Vehicles' && v.boardType !== 'Non Tboard Vehicles')
+    );
+    const normalizedVehicles = baseVehicles.map((v) => ({
+      ...v,
+      fc: v.fc ?? '',
+      insurance: v.insurance ?? '',
+      permit: v.permit ?? '',
+      dealerPrice: v.dealerPrice ?? 0,
+      dealerType: VALID_DEALER_TYPES.includes(v.dealerType) ? v.dealerType : ('dealer' as DealerType),
+      dealerNumber: v.dealerNumber ?? '',
+      dealerPlaces: v.dealerPlaces ?? '',
+      notes: v.notes ?? '',
+      boardType:
+        v.boardType === 'Tboard Vehicles' || v.boardType === 'Non Tboard Vehicles'
+          ? v.boardType
+          : ('Non Tboard Vehicles' as const),
+    }));
+    const needsCatalogMarker = parsed.catalogTrimmedToTen !== true;
+    const shouldTrimSampleCatalog = needsCatalogMarker && normalizedVehicles.length > MAX_SAMPLE_VEHICLES;
+    const keptVehicles = shouldTrimSampleCatalog
+      ? normalizedVehicles.slice(0, MAX_SAMPLE_VEHICLES)
+      : normalizedVehicles;
+    const keptVehicleIds = new Set(keptVehicles.map((v) => v.id));
+
+    const rawEnquiries = Array.isArray(parsed.enquiries) ? parsed.enquiries : initial.enquiries;
+    const syncedEnquiries = shouldTrimSampleCatalog
+      ? rawEnquiries.map((e) =>
+          e.vehicleId && !keptVehicleIds.has(e.vehicleId) ? { ...e, vehicleId: undefined } : e
+        )
+      : rawEnquiries;
+    const rawEvents = Array.isArray(parsed.analyticsEvents) ? parsed.analyticsEvents : initial.analyticsEvents;
+    const syncedEvents = shouldTrimSampleCatalog
+      ? rawEvents.map((ev) =>
+          ev.vehicleId && !keptVehicleIds.has(ev.vehicleId) ? { ...ev, vehicleId: undefined } : ev
+        )
+      : rawEvents;
+    const needsReferenceCleanup =
+      shouldTrimSampleCatalog &&
+      (syncedEnquiries.some((e, i) => e !== rawEnquiries[i]) ||
+        syncedEvents.some((ev, i) => ev !== rawEvents[i]));
+
+    return {
+      data: {
+        users: Array.isArray(parsed.users) ? parsed.users : initial.users,
+        vehicles: keptVehicles,
+        enquiries: syncedEnquiries,
+        siteContent: syncedContent,
+        themeColors: parsed.themeColors ? { ...initial.themeColors, ...parsed.themeColors } : initial.themeColors,
+        analyticsEvents: syncedEvents,
+        notifications: Array.isArray(parsed.notifications) ? parsed.notifications : initial.notifications,
+        catalogTrimmedToTen: true,
+      },
+      changed:
+        needsBrandSync ||
+        needsVehicleFieldsUpgrade ||
+        shouldTrimSampleCatalog ||
+        needsCatalogMarker ||
+        needsReferenceCleanup,
+    };
+  }
+
+  private async readSeedJsonOrInitial(): Promise<{ data: DataStore; fromDisk: boolean }> {
+    try {
+      let raw: string;
+      try {
+        raw = await fs.readFile(this.activeStorePath, 'utf8');
+      } catch {
+        raw = await fs.readFile(SEED_STORE_PATH, 'utf8');
+      }
+      const parsed = JSON.parse(raw) as Partial<DataStore>;
+      return { data: this.normalizeParsedStore(parsed).data, fromDisk: true };
+    } catch {
+      return { data: createInitialStore(), fromDisk: false };
+    }
+  }
+
+  private async initPostgres(): Promise<boolean> {
+    const dbUrl = (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim();
+    if (!dbUrl) return false;
+
+    try {
+      const parsedUrl = new URL(dbUrl);
+      const sslMode = parsedUrl.searchParams.get('sslmode');
+      parsedUrl.searchParams.delete('channel_binding');
+      parsedUrl.searchParams.delete('sslmode');
+      const needsSsl =
+        sslMode !== 'disable' &&
+        parsedUrl.hostname !== 'localhost' &&
+        parsedUrl.hostname !== '127.0.0.1';
+
+      const pool = new pg.Pool({
+        connectionString: parsedUrl.toString(),
+        max: 3,
+        connectionTimeoutMillis: 15000,
+        idleTimeoutMillis: 15000,
+        ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+      });
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS app_store_sections (
+          key TEXT PRIMARY KEY,
+          data JSONB NOT NULL,
+          version BIGINT NOT NULL DEFAULT 1,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      const existing = await pool.query<{ key: string; data: unknown; version: string }>(
+        'SELECT key, data, version FROM app_store_sections'
+      );
+
+      if (existing.rows.length === 0) {
+        const seed = await this.readSeedJsonOrInitial();
+        this.data = seed.data;
+        for (const key of STORE_SECTION_KEYS) {
+          const res = await pool.query<{ version: string }>(
+            `INSERT INTO app_store_sections (key, data, version, updated_at)
+             VALUES ($1, $2::jsonb, 1, NOW())
+             ON CONFLICT (key) DO NOTHING
+             RETURNING version`,
+            [key, JSON.stringify(this.data[key])]
+          );
+          if (res.rows[0]) {
+            this.sectionVersions.set(key, Number(res.rows[0].version));
+          }
+        }
+        const refreshed = await pool.query<{ key: string; data: unknown; version: string }>(
+          'SELECT key, data, version FROM app_store_sections'
+        );
+        for (const row of refreshed.rows) {
+          if ((STORE_SECTION_KEYS as string[]).includes(row.key)) {
+            const k = row.key as StoreSectionKey;
+            (this.data as unknown as Record<string, unknown>)[k] = row.data;
+            this.sectionVersions.set(k, Number(row.version));
+          }
+        }
+      } else {
+        const initial = createInitialStore();
+        const assembled: Partial<DataStore> = { catalogTrimmedToTen: true };
+        for (const row of existing.rows) {
+          if ((STORE_SECTION_KEYS as string[]).includes(row.key)) {
+            const k = row.key as StoreSectionKey;
+            (assembled as unknown as Record<string, unknown>)[k] = row.data;
+            this.sectionVersions.set(k, Number(row.version));
+          }
+        }
+        for (const key of STORE_SECTION_KEYS) {
+          if (assembled[key] === undefined) {
+            (assembled as unknown as Record<string, unknown>)[key] = initial[key];
+            await pool.query(
+              `INSERT INTO app_store_sections (key, data, version, updated_at)
+               VALUES ($1, $2::jsonb, 1, NOW())
+               ON CONFLICT (key) DO NOTHING`,
+              [key, JSON.stringify(initial[key])]
+            );
+            this.sectionVersions.set(key, 1);
+          }
+        }
+        const normalized = this.normalizeParsedStore(assembled);
+        this.data = normalized.data;
+      }
+
+      this.pool = pool;
+      this.lastDbError = null;
+      return true;
+    } catch (err) {
+      this.lastDbError = (err as Error)?.message || 'PostgreSQL connection failed';
+      console.warn('PostgreSQL unavailable, falling back to local JSON store:', this.lastDbError);
+      this.pool = null;
+      return false;
+    }
+  }
+
+  getStorageMode(): 'postgres' | 'json' | 'memory' {
+    if (this.pool) return 'postgres';
+    return this.readOnlyMemoryMode ? 'memory' : 'json';
+  }
+
+  getLastDbError(): string | null {
+    return this.lastDbError;
+  }
+
+  async ensureFresh(): Promise<void> {
+    if (!this.pool) {
+      const hasEnv = Boolean((process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim());
+      if (hasEnv && Date.now() - this.lastPgRetryAt > 10000) {
+        this.lastPgRetryAt = Date.now();
+        await this.initPostgres();
+      }
+      if (!this.pool) return;
+    }
+    try {
+      const res = await this.pool.query<{ key: string; version: string }>(
+        'SELECT key, version FROM app_store_sections'
+      );
+      const staleKeys: StoreSectionKey[] = [];
+      for (const row of res.rows) {
+        if ((STORE_SECTION_KEYS as string[]).includes(row.key)) {
+          const k = row.key as StoreSectionKey;
+          const dbVer = Number(row.version);
+          if (this.sectionVersions.get(k) !== dbVer) {
+            staleKeys.push(k);
+          }
+        }
+      }
+      if (staleKeys.length > 0) {
+        const dataRes = await this.pool.query<{ key: string; data: unknown; version: string }>(
+          'SELECT key, data, version FROM app_store_sections WHERE key = ANY($1)',
+          [staleKeys]
+        );
+        for (const row of dataRes.rows) {
+          const k = row.key as StoreSectionKey;
+          (this.data as unknown as Record<string, unknown>)[k] = row.data;
+          this.sectionVersions.set(k, Number(row.version));
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to refresh sections from PostgreSQL:', (err as Error)?.message || err);
+    }
+  }
 
   async init(): Promise<void> {
     if (this.initialized) return;
+
+    const pgReady = await this.initPostgres();
+    if (pgReady) {
+      this.initialized = true;
+      return;
+    }
+
     try {
       await fs.mkdir(this.activeDataDir, { recursive: true });
     } catch {
@@ -395,91 +681,9 @@ class StoreManager {
         raw = await fs.readFile(SEED_STORE_PATH, 'utf8');
       }
       const parsed = JSON.parse(raw) as Partial<DataStore>;
-      const initial = createInitialStore();
-      const rawContent = parsed.siteContent ? { ...initial.siteContent, ...parsed.siteContent } : initial.siteContent;
-      const needsBrandSync =
-        !parsed.siteContent?.logoUrl ||
-        parsed.siteContent?.contactEmail === 'sales@annamalaiyarcars.in';
-      const syncedContent: SiteContent = needsBrandSync
-        ? {
-            ...rawContent,
-            logoUrl: initial.siteContent.logoUrl,
-            bannerUrl: initial.siteContent.bannerUrl,
-            heroKicker: initial.siteContent.heroKicker,
-            showroomAddress: initial.siteContent.showroomAddress,
-            showroomCity: initial.siteContent.showroomCity,
-            contactPhone: initial.siteContent.contactPhone,
-            contactEmail: initial.siteContent.contactEmail,
-            whatsappNumber: initial.siteContent.whatsappNumber,
-            footerNote: initial.siteContent.footerNote,
-          }
-        : rawContent;
-
-      const existingVehicles = Array.isArray(parsed.vehicles) ? parsed.vehicles : [];
-      const baseVehicles = existingVehicles.length > 0 ? existingVehicles : initial.vehicles;
-      const needsVehicleFieldsUpgrade = baseVehicles.some(
-        (v) =>
-          v.fc === undefined ||
-          v.insurance === undefined ||
-          v.permit === undefined ||
-          v.dealerPrice === undefined ||
-          v.dealerType === undefined ||
-          v.dealerNumber === undefined ||
-          v.dealerPlaces === undefined ||
-          v.notes === undefined ||
-          !VALID_DEALER_TYPES.includes(v.dealerType) ||
-          (v.boardType !== 'Tboard Vehicles' && v.boardType !== 'Non Tboard Vehicles')
-      );
-      const normalizedVehicles = baseVehicles.map((v) => ({
-        ...v,
-        fc: v.fc ?? '',
-        insurance: v.insurance ?? '',
-        permit: v.permit ?? '',
-        dealerPrice: v.dealerPrice ?? 0,
-        dealerType: VALID_DEALER_TYPES.includes(v.dealerType) ? v.dealerType : ('dealer' as DealerType),
-        dealerNumber: v.dealerNumber ?? '',
-        dealerPlaces: v.dealerPlaces ?? '',
-        notes: v.notes ?? '',
-        boardType:
-          v.boardType === 'Tboard Vehicles' || v.boardType === 'Non Tboard Vehicles'
-            ? v.boardType
-            : 'Non Tboard Vehicles',
-      }));
-      const needsCatalogMarker = parsed.catalogTrimmedToTen !== true;
-      const shouldTrimSampleCatalog = needsCatalogMarker && normalizedVehicles.length > MAX_SAMPLE_VEHICLES;
-      const keptVehicles = shouldTrimSampleCatalog
-        ? normalizedVehicles.slice(0, MAX_SAMPLE_VEHICLES)
-        : normalizedVehicles;
-      const keptVehicleIds = new Set(keptVehicles.map((v) => v.id));
-
-      const rawEnquiries = Array.isArray(parsed.enquiries) ? parsed.enquiries : initial.enquiries;
-      const syncedEnquiries = shouldTrimSampleCatalog
-        ? rawEnquiries.map((e) =>
-            e.vehicleId && !keptVehicleIds.has(e.vehicleId) ? { ...e, vehicleId: undefined } : e
-          )
-        : rawEnquiries;
-      const rawEvents = Array.isArray(parsed.analyticsEvents) ? parsed.analyticsEvents : initial.analyticsEvents;
-      const syncedEvents = shouldTrimSampleCatalog
-        ? rawEvents.map((ev) =>
-            ev.vehicleId && !keptVehicleIds.has(ev.vehicleId) ? { ...ev, vehicleId: undefined } : ev
-          )
-        : rawEvents;
-      const needsReferenceCleanup =
-        shouldTrimSampleCatalog &&
-        (syncedEnquiries.some((e, i) => e !== rawEnquiries[i]) ||
-          syncedEvents.some((ev, i) => ev !== rawEvents[i]));
-
-      this.data = {
-        users: Array.isArray(parsed.users) ? parsed.users : initial.users,
-        vehicles: keptVehicles,
-        enquiries: syncedEnquiries,
-        siteContent: syncedContent,
-        themeColors: parsed.themeColors ? { ...initial.themeColors, ...parsed.themeColors } : initial.themeColors,
-        analyticsEvents: syncedEvents,
-        notifications: Array.isArray(parsed.notifications) ? parsed.notifications : initial.notifications,
-        catalogTrimmedToTen: true,
-      };
-      if (needsBrandSync || needsVehicleFieldsUpgrade || shouldTrimSampleCatalog || needsCatalogMarker || needsReferenceCleanup) {
+      const normalized = this.normalizeParsedStore(parsed);
+      this.data = normalized.data;
+      if (normalized.changed) {
         await this.persist();
       }
     } catch {
@@ -489,7 +693,33 @@ class StoreManager {
     this.initialized = true;
   }
 
-  private persist(): Promise<void> {
+  private persist(sections: StoreSectionKey[] = STORE_SECTION_KEYS): Promise<void> {
+    if (this.pool) {
+      const pool = this.pool;
+      this.writeChain = this.writeChain
+        .then(async () => {
+          for (const key of sections) {
+            const res = await pool.query<{ version: string }>(
+              `INSERT INTO app_store_sections (key, data, version, updated_at)
+               VALUES ($1, $2::jsonb, 1, NOW())
+               ON CONFLICT (key) DO UPDATE
+               SET data = EXCLUDED.data,
+                   version = app_store_sections.version + 1,
+                   updated_at = NOW()
+               RETURNING version`,
+              [key, JSON.stringify(this.data[key])]
+            );
+            if (res.rows[0]) {
+              this.sectionVersions.set(key, Number(res.rows[0].version));
+            }
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to persist store to PostgreSQL:', err);
+        });
+      return this.writeChain;
+    }
+
     if (this.readOnlyMemoryMode) {
       return Promise.resolve();
     }
@@ -567,24 +797,27 @@ class StoreManager {
   }
 
   async addUser(user: StoredUser): Promise<UserAccount> {
+    await this.ensureFresh();
     this.data.users.unshift(user);
-    await this.persist();
+    await this.persist(['users']);
     return this.toPublicUser(user);
   }
 
   async updateUser(id: string, patch: Partial<StoredUser>): Promise<UserAccount | null> {
+    await this.ensureFresh();
     const idx = this.data.users.findIndex((u) => u.id === id);
     if (idx === -1) return null;
     this.data.users[idx] = { ...this.data.users[idx], ...patch };
-    await this.persist();
+    await this.persist(['users']);
     return this.toPublicUser(this.data.users[idx]);
   }
 
   async deleteUser(id: string): Promise<boolean> {
+    await this.ensureFresh();
     const before = this.data.users.length;
     this.data.users = this.data.users.filter((u) => u.id !== id);
     if (this.data.users.length === before) return false;
-    await this.persist();
+    await this.persist(['users']);
     return true;
   }
 
@@ -597,12 +830,14 @@ class StoreManager {
   }
 
   async addVehicle(vehicle: Vehicle): Promise<Vehicle> {
+    await this.ensureFresh();
     this.data.vehicles.unshift(vehicle);
-    await this.persist();
+    await this.persist(['vehicles']);
     return vehicle;
   }
 
   async updateVehicle(id: string, patch: Partial<Vehicle>): Promise<Vehicle | null> {
+    await this.ensureFresh();
     const idx = this.data.vehicles.findIndex((v) => v.id === id);
     if (idx === -1) return null;
     this.data.vehicles[idx] = {
@@ -610,15 +845,16 @@ class StoreManager {
       ...patch,
       updatedAt: new Date().toISOString(),
     };
-    await this.persist();
+    await this.persist(['vehicles']);
     return this.data.vehicles[idx];
   }
 
   async deleteVehicle(id: string): Promise<boolean> {
+    await this.ensureFresh();
     const before = this.data.vehicles.length;
     this.data.vehicles = this.data.vehicles.filter((v) => v.id !== id);
     if (this.data.vehicles.length === before) return false;
-    await this.persist();
+    await this.persist(['vehicles']);
     return true;
   }
 
@@ -627,12 +863,14 @@ class StoreManager {
   }
 
   async addEnquiry(enquiry: Enquiry): Promise<Enquiry> {
+    await this.ensureFresh();
     this.data.enquiries.unshift(enquiry);
-    await this.persist();
+    await this.persist(['enquiries']);
     return enquiry;
   }
 
   async updateEnquiry(id: string, patch: Partial<Enquiry>): Promise<Enquiry | null> {
+    await this.ensureFresh();
     const idx = this.data.enquiries.findIndex((e) => e.id === id);
     if (idx === -1) return null;
     this.data.enquiries[idx] = {
@@ -640,15 +878,16 @@ class StoreManager {
       ...patch,
       updatedAt: new Date().toISOString(),
     };
-    await this.persist();
+    await this.persist(['enquiries']);
     return this.data.enquiries[idx];
   }
 
   async deleteEnquiry(id: string): Promise<boolean> {
+    await this.ensureFresh();
     const before = this.data.enquiries.length;
     this.data.enquiries = this.data.enquiries.filter((enquiry) => enquiry.id !== id);
     if (this.data.enquiries.length === before) return false;
-    await this.persist();
+    await this.persist(['enquiries']);
     return true;
   }
 
@@ -657,8 +896,9 @@ class StoreManager {
   }
 
   async updateSiteContent(patch: Partial<SiteContent>): Promise<SiteContent> {
+    await this.ensureFresh();
     this.data.siteContent = { ...this.data.siteContent, ...patch };
-    await this.persist();
+    await this.persist(['siteContent']);
     return this.data.siteContent;
   }
 
@@ -667,21 +907,27 @@ class StoreManager {
   }
 
   async updateThemeColors(patch: Partial<ThemeColors>): Promise<ThemeColors> {
+    await this.ensureFresh();
     this.data.themeColors = { ...this.data.themeColors, ...patch };
-    await this.persist();
+    await this.persist(['themeColors']);
     return this.data.themeColors;
   }
 
   async trackEvent(event: AnalyticsEvent): Promise<void> {
+    await this.ensureFresh();
     this.data.analyticsEvents.unshift(event);
     if (this.data.analyticsEvents.length > 2500) {
       this.data.analyticsEvents = this.data.analyticsEvents.slice(0, 2500);
     }
+    const sections: StoreSectionKey[] = ['analyticsEvents'];
     if (event.type === 'vehicle_view' && event.vehicleId) {
       const veh = this.data.vehicles.find((v) => v.id === event.vehicleId);
-      if (veh) veh.views += 1;
+      if (veh) {
+        veh.views += 1;
+        sections.push('vehicles');
+      }
     }
-    await this.persist();
+    await this.persist(sections);
   }
 
   getAnalyticsSummary(): AnalyticsSummary {
@@ -759,36 +1005,40 @@ class StoreManager {
   }
 
   async addNotification(notif: AppNotification): Promise<AppNotification> {
+    await this.ensureFresh();
     this.data.notifications.unshift(notif);
     if (this.data.notifications.length > 200) {
       this.data.notifications = this.data.notifications.slice(0, 200);
     }
-    await this.persist();
+    await this.persist(['notifications']);
     return notif;
   }
 
   async markNotificationRead(id: string, userId: string): Promise<void> {
+    await this.ensureFresh();
     const n = this.data.notifications.find((item) => item.id === id);
     if (n && !n.readBy.includes(userId)) {
       n.readBy.push(userId);
-      await this.persist();
+      await this.persist(['notifications']);
     }
   }
 
   async markAllNotificationsRead(userId: string): Promise<void> {
+    await this.ensureFresh();
     for (const n of this.data.notifications) {
       if (!n.readBy.includes(userId)) {
         n.readBy.push(userId);
       }
     }
-    await this.persist();
+    await this.persist(['notifications']);
   }
 
   async deleteNotification(id: string): Promise<boolean> {
+    await this.ensureFresh();
     const before = this.data.notifications.length;
     this.data.notifications = this.data.notifications.filter((n) => n.id !== id);
     if (this.data.notifications.length === before) return false;
-    await this.persist();
+    await this.persist(['notifications']);
     return true;
   }
 }
