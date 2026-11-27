@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext.tsx';
 import { formatRelativeTime } from '../../lib/format.ts';
+import { Pagination, paginate } from '../ui/Pagination.tsx';
 
 export function AnalyticsPanel() {
   const { analytics, vehicles, enquiries, wsConnected, wsClients } = useApp();
+  const [topPage, setTopPage] = useState(1);
+  const [eventsPage, setEventsPage] = useState(1);
 
   if (!analytics) {
     return (
@@ -25,6 +28,13 @@ export function AnalyticsPanel() {
   const totalInventoryValue = vehicles
     .filter((v) => v.status === 'Available')
     .reduce((sum, v) => sum + v.finalPrice, 0);
+
+  const topVehicles = analytics.topVehicles;
+  const recentEvents = analytics.recentEvents;
+  useEffect(() => { setTopPage(1); }, [topVehicles.length]);
+  useEffect(() => { setEventsPage(1); }, [recentEvents.length]);
+  const pagedTopVehicles = useMemo(() => paginate(topVehicles, topPage, 10), [topVehicles, topPage]);
+  const pagedRecentEvents = useMemo(() => paginate(recentEvents, eventsPage, 10), [recentEvents, eventsPage]);
 
   return (
     <div className="space-y-6">
@@ -209,7 +219,7 @@ export function AnalyticsPanel() {
                 </tr>
               </thead>
               <tbody className="divide-y" style={{ borderColor: 'var(--site-border)' }}>
-                {analytics.topVehicles.map((v) => (
+                {pagedTopVehicles.map((v) => (
                   <tr key={v.id} className="h-10">
                     <td className="py-2 pr-4 font-medium">{v.label}</td>
                     <td className="py-2 px-3 text-right font-mono-tabular">{v.views}</td>
@@ -221,6 +231,7 @@ export function AnalyticsPanel() {
               </tbody>
             </table>
           </div>
+          <Pagination currentPage={topPage} totalItems={topVehicles.length} pageSize={10} onPageChange={setTopPage} />
         </div>
 
         <div
@@ -228,8 +239,8 @@ export function AnalyticsPanel() {
           style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
         >
           <h3 className="font-display text-base font-semibold">Recent Site Activity</h3>
-          <div className="mt-4 space-y-2.5 max-h-64 overflow-y-auto pr-1">
-            {analytics.recentEvents.slice(0, 12).map((ev) => (
+          <div className="mt-4 space-y-2.5">
+            {pagedRecentEvents.map((ev) => (
               <div
                 key={ev.id}
                 className="flex items-center justify-between gap-3 border-b pb-2 text-xs last:border-0"
@@ -247,6 +258,7 @@ export function AnalyticsPanel() {
               </div>
             ))}
           </div>
+          <Pagination currentPage={eventsPage} totalItems={recentEvents.length} pageSize={10} onPageChange={setEventsPage} />
         </div>
       </div>
     </div>

@@ -173,9 +173,8 @@ export const DEFAULT_SITE_CONTENT: SiteContent = {
   announcementEnabled: true,
   announcementText: 'Verified 150-point inspected pre-owned vehicles in Trichy · Instant RTO transfer & financing available.',
   heroKicker: 'Trusted Pre-Owned Showroom · Cantonment, Trichy-1',
-  heroHeadline: 'Find the car that fits your journey.',
-  heroSubheadline:
-    'Every vehicle in our gallery undergoes mechanical verification, verified odometer auditing, and transparent pricing with zero hidden fees.',
+  heroHeadline: 'THE AUTO CHOICE',
+  heroSubheadline: 'Your Journey Begins Here',
   heroPrimaryCta: 'Browse Inventory',
   heroSecondaryCta: 'Book Showroom Visit',
   heroImageUrl: IMG_HERO,
@@ -488,6 +487,10 @@ class StoreManager {
     const rawDealerContacts = Array.isArray(parsed.dealerContacts)
       ? parsed.dealerContacts
       : initial.dealerContacts;
+    const today = (() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    })();
     const dealerContacts = rawDealerContacts
       .filter((contact) => VALID_DEALER_CONTACT_KINDS.includes(contact.kind))
       .map((contact) => ({
@@ -495,13 +498,19 @@ class StoreManager {
         name: typeof contact.name === 'string' ? contact.name : String(contact.name ?? ''),
         location: typeof contact.location === 'string' ? contact.location : String(contact.location ?? ''),
         phone: typeof contact.phone === 'string' ? contact.phone : String(contact.phone ?? ''),
+        date:
+          typeof contact.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(contact.date)
+            ? contact.date
+            : String(contact.createdAt || '').slice(0, 10) || today,
       }));
     const needsDealerContactCleanup = rawDealerContacts.some(
       (contact) =>
         !VALID_DEALER_CONTACT_KINDS.includes(contact.kind) ||
         typeof contact.name !== 'string' ||
         typeof contact.location !== 'string' ||
-        typeof contact.phone !== 'string'
+        typeof contact.phone !== 'string' ||
+        typeof contact.date !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(contact.date)
     );
 
     return {

@@ -23,6 +23,7 @@ import { useApp } from '../context/AppContext.tsx';
 import { apiRequest, uploadVehicleImage } from '../lib/api.ts';
 import { formatInrFull, formatInrLakhs, formatKm, formatRelativeTime, safeExternalHref } from '../lib/format.ts';
 import { DealerDirectoryPanel } from './DealerDirectoryPanel.tsx';
+import { Pagination, paginate } from './ui/Pagination.tsx';
 import type { Enquiry, EnquiryStatus, Vehicle, VehicleBoardType } from '../../shared/types.ts';
 
 const CAR_IMAGE_PRESETS = [
@@ -133,6 +134,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
   const [inlineMessage, setInlineMessage] = useState('');
   const [inlineSubmitting, setInlineSubmitting] = useState(false);
   const [inlineSuccess, setInlineSuccess] = useState(false);
+  const [inlineFormKey, setInlineFormKey] = useState(0);
 
   // Modal Enquiry Form State
   const [enqName, setEnqName] = useState('');
@@ -184,6 +186,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
   // Frontend View All Enquiries Filter State
   const [enqSearch, setEnqSearch] = useState('');
   const [enqStatusFilter, setEnqStatusFilter] = useState<'All' | EnquiryStatus>('All');
+  const [enqPage, setEnqPage] = useState(1);
   const [editingEnquiry, setEditingEnquiry] = useState<Enquiry | null>(null);
   const [enquiryEditSaving, setEnquiryEditSaving] = useState(false);
   const [enquiryEditForm, setEnquiryEditForm] = useState({
@@ -361,6 +364,17 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
         .includes(q);
     });
   }, [enquiries, enqSearch, enqStatusFilter]);
+
+  useEffect(() => {
+    setEnqPage(1);
+  }, [enqSearch, enqStatusFilter]);
+
+  useEffect(() => {
+    const max = Math.max(1, Math.ceil(filteredEnquiries.length / 10));
+    if (enqPage > max) setEnqPage(max);
+  }, [filteredEnquiries.length, enqPage]);
+
+  const pagedEnquiries = useMemo(() => paginate(filteredEnquiries, enqPage, 10), [filteredEnquiries, enqPage]);
 
   const scrollToSection = (id: string) => {
     setTimeout(() => {
@@ -738,6 +752,14 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
         message: 'Our Trichy showroom team received your request.',
         type: 'enquiry',
       });
+      setEnqName('');
+      setEnqPhone('');
+      setEnqEmail('');
+      setEnqBudget('');
+      setEnqLocation('');
+      setEnqDate(TODAY_ISO());
+      setEnqOlxId('');
+      setEnqStatus('Just Enquiry');
       setEnqMessage('');
     } catch (err: unknown) {
       pushToast({
@@ -748,6 +770,23 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     } finally {
       setEnqSubmitting(false);
     }
+  };
+
+  const resetInlineEnquiryForm = () => {
+    setInlineCustomer('');
+    setInlinePhone('');
+    setInlineEmail('');
+    setInlineVehicle('');
+    setInlineManualVehicle('');
+    setInlineBudget('');
+    setInlineLocation('');
+    setInlineDate(TODAY_ISO());
+    setInlineOlxId('');
+    setInlineStatus('Just Enquiry');
+    setInlineFuel('Any Fuel');
+    setInlineTrans('Any Transmission');
+    setInlineMessage('');
+    setInlineFormKey((key) => key + 1);
   };
 
   const handleSubmitInlineEnquiry = async (e: React.FormEvent) => {
@@ -793,10 +832,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
 
       prependEnquiry(res.enquiry);
       setInlineSuccess(true);
-      setInlineMessage('');
-      setInlineBudget('');
-      setInlineVehicle('');
-      setInlineManualVehicle('');
+      resetInlineEnquiryForm();
       pushToast({
         title: 'Enquiry Saved',
         message: `Enquiry for ${vehicleLabel} sent to the Auto Choice team.`,
@@ -2218,7 +2254,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
               </div>
             )}
 
-            <form onSubmit={handleSubmitInlineEnquiry} className="mt-5 space-y-4">
+            <form key={inlineFormKey} onSubmit={handleSubmitInlineEnquiry} autoComplete="off" className="mt-5 space-y-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--site-muted)' }}>
@@ -2227,6 +2263,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   <input
                     type="text"
                     required
+                    autoComplete="off"
                     value={inlineCustomer}
                     onChange={(e) => setInlineCustomer(e.target.value)}
                     placeholder="Your full name"
@@ -2245,6 +2282,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   <input
                     type="tel"
                     required
+                    autoComplete="off"
                     value={inlinePhone}
                     onChange={(e) => setInlinePhone(e.target.value)}
                     placeholder="e.g. 93855 88888"
@@ -2445,6 +2483,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   </label>
                   <input
                     type="email"
+                    autoComplete="off"
                     value={inlineEmail}
                     onChange={(e) => setInlineEmail(e.target.value)}
                     placeholder="you@example.com"
@@ -2591,8 +2630,9 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
               : 'No enquiries match your active search or status filter.'}
           </div>
         ) : (
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {filteredEnquiries.map((enq) => (
+          <div className="mt-5 overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--site-border)' }}>
+            <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2" style={{ backgroundColor: 'transparent' }}>
+              {pagedEnquiries.map((enq: Enquiry) => (
               <div
                 key={enq.id}
                 className="rounded-2xl border p-5 flex flex-col justify-between gap-4"
@@ -2685,6 +2725,8 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 </div>
               </div>
             ))}
+            </div>
+            <Pagination currentPage={enqPage} totalItems={filteredEnquiries.length} pageSize={10} onPageChange={setEnqPage} />
           </div>
         )}
       </section>
@@ -2885,9 +2927,9 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   {item.detail}
                 </p>
               </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
       </section>
 
       {/* Showroom & Footer */}

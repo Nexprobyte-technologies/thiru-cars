@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ImagePlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { apiRequest, uploadVehicleImage } from '../../lib/api.ts';
 import { formatInrLakhs, formatKm } from '../../lib/format.ts';
+import { Pagination, paginate } from '../ui/Pagination.tsx';
 import type { Vehicle, VehicleBoardType } from '../../../shared/types.ts';
 
 const VEHICLE_BOARD_TYPES: VehicleBoardType[] = ['Tboard Vehicles', 'Non Tboard Vehicles'];
@@ -27,6 +28,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
   const { vehicles, user, token, pushToast, refreshProtected } = useApp();
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | Vehicle['status']>('All');
+  const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [saving, setSaving] = useState(false);
@@ -73,6 +75,17 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       return `${v.brand} ${v.model} ${v.reg} ${v.dealer}`.toLowerCase().includes(q);
     });
   }, [vehicles, query, statusFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter]);
+
+  useEffect(() => {
+    const max = Math.max(1, Math.ceil(filtered.length / 10));
+    if (page > max) setPage(max);
+  }, [filtered.length, page]);
+
+  const paged = useMemo(() => paginate(filtered, page, 10), [filtered, page]);
 
   const openCreate = () => {
     setEditingVehicle(null);
@@ -353,7 +366,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
             </tr>
           </thead>
           <tbody className="divide-y" style={{ borderColor: 'var(--site-border)' }}>
-            {filtered.map((v) => (
+            {paged.map((v) => (
               <tr key={v.id} className="hover:bg-white/[0.02]">
                 <td className="px-4 py-3">
                   <p className="font-semibold">
@@ -436,6 +449,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
             ))}
           </tbody>
         </table>
+        <Pagination currentPage={page} totalItems={filtered.length} pageSize={10} onPageChange={setPage} />
       </div>
 
       {/* Add / Edit Vehicle Modal */}

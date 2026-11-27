@@ -37,6 +37,7 @@ export interface DealerContact {
   name: string;
   location: string;
   phone: string;
+  date?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { apiRequest } from '../../lib/api.ts';
 import { formatRelativeTime } from '../../lib/format.ts';
+import { Pagination, paginate } from '../ui/Pagination.tsx';
 import type { Enquiry, EnquiryStatus, UserAccount } from '../../../shared/types.ts';
 
 const STATUS_LIST: EnquiryStatus[] = [
@@ -32,6 +33,7 @@ export function EnquiriesPanel({ staffMembers }: { staffMembers: UserAccount[] }
   const isAdmin = user?.role === 'admin';
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | EnquiryStatus>('All');
+  const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEnquiry, setEditingEnquiry] = useState<Enquiry | null>(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -74,6 +76,17 @@ export function EnquiriesPanel({ staffMembers }: { staffMembers: UserAccount[] }
         .includes(q);
     });
   }, [enquiries, query, statusFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter]);
+
+  useEffect(() => {
+    const max = Math.max(1, Math.ceil(filtered.length / 10));
+    if (page > max) setPage(max);
+  }, [filtered.length, page]);
+
+  const paged = useMemo(() => paginate(filtered, page, 10), [filtered, page]);
 
   const handleUpdate = async (id: string, patch: { status?: EnquiryStatus; assignedStaffId?: string; notes?: string }) => {
     if (!token) return;
@@ -311,8 +324,12 @@ export function EnquiriesPanel({ staffMembers }: { staffMembers: UserAccount[] }
           No enquiries match the active filter.
         </div>
       ) : (
-        <div className="space-y-3">
-          {filtered.map((enq) => (
+        <div
+          className="overflow-hidden rounded-2xl border"
+          style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
+        >
+          <div className="space-y-3 p-4">
+          {paged.map((enq) => (
             <div
               key={enq.id}
               className="rounded-2xl border p-5"
@@ -421,6 +438,8 @@ export function EnquiriesPanel({ staffMembers }: { staffMembers: UserAccount[] }
               </div>
             </div>
           ))}
+          </div>
+          <Pagination currentPage={page} totalItems={filtered.length} pageSize={10} onPageChange={setPage} />
         </div>
       )}
 

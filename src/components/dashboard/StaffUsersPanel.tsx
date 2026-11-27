@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, Search, Shield, Trash2, UserPlus, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { apiRequest } from '../../lib/api.ts';
 import { formatRelativeTime } from '../../lib/format.ts';
+import { Pagination, paginate } from '../ui/Pagination.tsx';
 import type { StaffPermissions, UserAccount } from '../../../shared/types.ts';
 
 interface StaffUsersPanelProps {
@@ -23,6 +24,7 @@ const PERMISSION_LABELS: Array<{ key: keyof StaffPermissions; label: string }> =
 export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanelProps) {
   const { user: currentUser, token, pushToast } = useApp();
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -56,6 +58,17 @@ export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanel
       return `${u.name} ${u.username || ''} ${u.email} ${u.phone || ''} ${u.staffCode || ''}`.toLowerCase().includes(q);
     });
   }, [users, query, mode]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, mode]);
+
+  useEffect(() => {
+    const max = Math.max(1, Math.ceil(filtered.length / 10));
+    if (page > max) setPage(max);
+  }, [filtered.length, page]);
+
+  const paged = useMemo(() => paginate(filtered, page, 10), [filtered, page]);
 
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -252,8 +265,12 @@ export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanel
           </p>
         </div>
       ) : mode === 'staff' ? (
-        <div className="space-y-4">
-          {filtered.map((member) => (
+        <div
+          className="overflow-hidden rounded-2xl border"
+          style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
+        >
+          <div className="space-y-4 p-4">
+            {paged.map((member) => (
             <div
               key={member.id}
               className="rounded-2xl border p-5"
@@ -333,7 +350,9 @@ export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanel
                 </div>
               )}
             </div>
-          ))}
+            ))}
+          </div>
+          <Pagination currentPage={page} totalItems={filtered.length} pageSize={10} onPageChange={setPage} />
         </div>
       ) : (
         <div
@@ -351,7 +370,7 @@ export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanel
               </tr>
             </thead>
             <tbody className="divide-y" style={{ borderColor: 'var(--site-border)' }}>
-              {filtered.map((cust) => (
+              {paged.map((cust) => (
                 <tr key={cust.id}>
                   <td className="px-4 py-3 font-semibold">
                     {cust.name}
@@ -394,6 +413,7 @@ export function StaffUsersPanel({ users, onRefreshUsers, mode }: StaffUsersPanel
               ))}
             </tbody>
           </table>
+          <Pagination currentPage={page} totalItems={filtered.length} pageSize={10} onPageChange={setPage} />
         </div>
       )}
 

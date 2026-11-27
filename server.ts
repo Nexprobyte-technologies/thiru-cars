@@ -91,6 +91,11 @@ function cleanDateOnly(val: unknown): string {
   return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text ? '' : text;
 }
 
+function todayDateOnly(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 const VALID_BOARD_TYPES: VehicleBoardType[] = ['', 'Tboard Vehicles', 'Non Tboard Vehicles'];
 
 function isOperatorRole(role: UserRole | 'guest'): boolean {
@@ -922,6 +927,7 @@ async function bootstrap() {
     const name = cleanText(req.body?.name, 80);
     const location = cleanText(req.body?.location, 120);
     const phone = cleanText(req.body?.phone, 30);
+    const date = cleanDateOnly(req.body?.date) || todayDateOnly();
     if (!kind) {
       return res.status(400).json({ error: 'A valid dealer directory is required.' });
     }
@@ -935,6 +941,7 @@ async function bootstrap() {
       name,
       location,
       phone,
+      date,
       createdAt: now,
       updatedAt: now,
     });
@@ -962,6 +969,9 @@ async function bootstrap() {
         return res.status(400).json({ error: 'A valid phone number is required.' });
       }
       patch.phone = phone;
+    }
+    if (req.body?.date !== undefined) {
+      patch.date = cleanDateOnly(req.body.date) || existing.date || todayDateOnly();
     }
     const updated = await store.updateDealerContact(existing.id, patch);
     if (!updated) {

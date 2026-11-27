@@ -4,16 +4,22 @@ import { useApp } from '../context/AppContext.tsx';
 import { apiRequest } from '../lib/api.ts';
 import type { DealerContact, DealerContactKind } from '../../shared/types.ts';
 
-const EMPTY_FORM = { name: '', location: '', phone: '' };
+const todayIso = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+const createEmptyForm = () => ({ name: '', location: '', phone: '', date: todayIso() });
 
 const DIRECTORY_CONFIG: Record<
   DealerContactKind,
-  { title: string; nameLabel: string; locationLabel?: string; phoneLabel: string; addLabel: string }
+  { title: string; nameLabel: string; locationLabel?: string; phoneLabel: string; dateLabel: string; addLabel: string }
 > = {
   purchase: {
     title: 'Purchasing Dealers',
     nameLabel: 'DEALER FOR PURCHASE',
     phoneLabel: 'PHONE NUMBERS',
+    dateLabel: 'DATE',
     addLabel: 'Add Purchase Dealer',
   },
   catalog: {
@@ -21,12 +27,14 @@ const DIRECTORY_CONFIG: Record<
     nameLabel: 'DEALERS CATLOGS',
     locationLabel: 'LOCATION',
     phoneLabel: 'PHONE NUMBERS',
+    dateLabel: 'DATE',
     addLabel: 'Add Dealers Catlog',
   },
   trichy: {
     title: 'Trichy Dealers',
     nameLabel: 'DEALERS NAME',
     phoneLabel: 'PHONE NUMBER',
+    dateLabel: 'DATE',
     addLabel: 'Add Trichy Dealer',
   },
 };
@@ -40,7 +48,7 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
   const canDelete = isAdmin || Boolean(user?.permissions.canDeleteCar);
 
   const [query, setQuery] = useState('');
-  const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [form, setForm] = useState(createEmptyForm);
   const [editing, setEditing] = useState<DealerContact | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -49,18 +57,18 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
     return dealerContacts.filter((contact) => {
       if (contact.kind !== kind) return false;
       if (!q) return true;
-      return `${contact.name} ${contact.location} ${contact.phone}`.toLowerCase().includes(q);
+      return `${contact.name} ${contact.location} ${contact.phone} ${contact.date || ''}`.toLowerCase().includes(q);
     });
   }, [dealerContacts, kind, query]);
 
   const resetForm = () => {
-    setForm({ ...EMPTY_FORM });
+    setForm(createEmptyForm());
     setEditing(null);
   };
 
   const startEdit = (contact: DealerContact) => {
     setEditing(contact);
-    setForm({ name: contact.name, location: contact.location, phone: contact.phone });
+    setForm({ name: contact.name, location: contact.location, phone: contact.phone, date: contact.date || todayIso() });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -117,7 +125,7 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
     <div className="space-y-5">
       <form
         onSubmit={(e) => void handleSubmit(e)}
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5"
       >
         <div>
           <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>
@@ -155,6 +163,19 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
             value={form.phone}
             onChange={(e) => setForm({ ...form, phone: e.target.value })}
             placeholder={config.phoneLabel}
+            className="w-full rounded-xl border px-3 py-2 text-xs outline-none font-mono-tabular"
+            style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+          />
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>
+            {config.dateLabel}
+          </label>
+          <input
+            type="date"
+            required
+            value={form.date}
+            onChange={(e) => setForm({ ...form, date: e.target.value })}
             className="w-full rounded-xl border px-3 py-2 text-xs outline-none font-mono-tabular"
             style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
           />
@@ -208,6 +229,7 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
               <th className="px-4 py-3 font-medium">{config.nameLabel}</th>
               {config.locationLabel && <th className="px-4 py-3 font-medium">{config.locationLabel}</th>}
               <th className="px-4 py-3 font-medium">{config.phoneLabel}</th>
+              <th className="px-4 py-3 font-medium">{config.dateLabel}</th>
               <th className="px-4 py-3 text-right font-medium">Actions</th>
             </tr>
           </thead>
@@ -216,7 +238,7 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
               <tr>
                 <td
                   className="px-4 py-8 text-center"
-                  colSpan={config.locationLabel ? 4 : 3}
+                  colSpan={config.locationLabel ? 5 : 4}
                   style={{ color: 'var(--site-muted)' }}
                 >
                   No {config.title.toLowerCase()} found.
@@ -232,6 +254,9 @@ export function DealerDirectoryPanel({ kind }: { kind: DealerContactKind }) {
                     </td>
                   )}
                   <td className="px-4 py-3 font-mono-tabular">{contact.phone}</td>
+                  <td className="px-4 py-3 font-mono-tabular" style={{ color: 'var(--site-muted)' }}>
+                    {contact.date || '—'}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-2">
                       <button
