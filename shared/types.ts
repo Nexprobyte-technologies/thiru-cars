@@ -25,9 +25,21 @@ export interface UserAccount {
   lastLoginAt?: string;
 }
 
-export type VehicleBoardType = 'Tboard Vehicles' | 'Non Tboard Vehicles';
+export type VehicleBoardType = '' | 'Tboard Vehicles' | 'Non Tboard Vehicles';
 
 export type DealerType = 'dealer' | 'tricy dealer' | 'purchase dealer';
+
+export type DealerContactKind = 'purchase' | 'catalog' | 'trichy';
+
+export interface DealerContact {
+  id: string;
+  kind: DealerContactKind;
+  name: string;
+  location: string;
+  phone: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface Vehicle {
   id: string;
@@ -58,6 +70,7 @@ export interface Vehicle {
   featured: boolean;
   imageUrl: string;
   views: number;
+  date: string;
   createdAt: string;
   updatedAt: string;
 }

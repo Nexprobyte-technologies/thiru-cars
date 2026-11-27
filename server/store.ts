@@ -7,6 +7,8 @@ import type {
   AnalyticsEvent,
   AnalyticsSummary,
   AppNotification,
+  DealerContact,
+  DealerContactKind,
   DealerType,
   Enquiry,
   SiteContent,
@@ -24,6 +26,7 @@ export interface DataStore {
   users: StoredUser[];
   vehicles: Vehicle[];
   enquiries: Enquiry[];
+  dealerContacts: DealerContact[];
   siteContent: SiteContent;
   themeColors: ThemeColors;
   analyticsEvents: AnalyticsEvent[];
@@ -35,6 +38,7 @@ type StoreSectionKey =
   | 'users'
   | 'vehicles'
   | 'enquiries'
+  | 'dealerContacts'
   | 'siteContent'
   | 'themeColors'
   | 'analyticsEvents'
@@ -44,6 +48,7 @@ const STORE_SECTION_KEYS: StoreSectionKey[] = [
   'users',
   'vehicles',
   'enquiries',
+  'dealerContacts',
   'siteContent',
   'themeColors',
   'analyticsEvents',
@@ -57,6 +62,7 @@ const WRITABLE_DATA_DIR =
 const STORE_PATH = path.join(WRITABLE_DATA_DIR, 'store.json');
 const MAX_SAMPLE_VEHICLES = 10;
 export const VALID_DEALER_TYPES: DealerType[] = ['dealer', 'tricy dealer', 'purchase dealer'];
+export const VALID_DEALER_CONTACT_KINDS: DealerContactKind[] = ['purchase', 'catalog', 'trichy'];
 
 const IMG_HERO = '/src/assets/images/hero_showroom_luxury_1795250937369.jpg';
 const IMG_SUV = '/src/assets/images/vehicle_suv_flagship_1795250937139.jpg';
@@ -270,6 +276,7 @@ function createInitialStore(): DataStore {
       featured: item.featured,
       imageUrl: pickVehicleImage(item.brand, item.model, item.colour, item.fuel),
       views: Math.max(12, 180 - idx * 4),
+      date: createdAt.slice(0, 10),
       createdAt,
       updatedAt: createdAt,
     };
@@ -376,6 +383,7 @@ function createInitialStore(): DataStore {
     users: [],
     vehicles,
     enquiries,
+    dealerContacts: [],
     siteContent: DEFAULT_SITE_CONTENT,
     themeColors: DEFAULT_THEME_COLORS,
     analyticsEvents,
@@ -430,8 +438,9 @@ class StoreManager {
         v.dealerNumber === undefined ||
         v.dealerPlaces === undefined ||
         v.notes === undefined ||
+        v.date === undefined ||
         !VALID_DEALER_TYPES.includes(v.dealerType) ||
-        (v.boardType !== 'Tboard Vehicles' && v.boardType !== 'Non Tboard Vehicles')
+        (v.boardType !== '' && v.boardType !== 'Tboard Vehicles' && v.boardType !== 'Non Tboard Vehicles')
     );
     const normalizedVehicles = baseVehicles.map((v) => ({
       ...v,
@@ -443,10 +452,14 @@ class StoreManager {
       dealerNumber: v.dealerNumber ?? '',
       dealerPlaces: v.dealerPlaces ?? '',
       notes: v.notes ?? '',
+      date:
+        typeof v.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.date)
+          ? v.date
+          : String(v.createdAt || new Date().toISOString()).slice(0, 10),
       boardType:
-        v.boardType === 'Tboard Vehicles' || v.boardType === 'Non Tboard Vehicles'
+        v.boardType === '' || v.boardType === 'Tboard Vehicles' || v.boardType === 'Non Tboard Vehicles'
           ? v.boardType
-          : ('Non Tboard Vehicles' as const),
+          : ('' as const),
     }));
     const needsCatalogMarker = parsed.catalogTrimmedToTen !== true;
     const shouldTrimSampleCatalog = needsCatalogMarker && normalizedVehicles.length > MAX_SAMPLE_VEHICLES;
@@ -472,11 +485,31 @@ class StoreManager {
       (syncedEnquiries.some((e, i) => e !== rawEnquiries[i]) ||
         syncedEvents.some((ev, i) => ev !== rawEvents[i]));
 
+    const rawDealerContacts = Array.isArray(parsed.dealerContacts)
+      ? parsed.dealerContacts
+      : initial.dealerContacts;
+    const dealerContacts = rawDealerContacts
+      .filter((contact) => VALID_DEALER_CONTACT_KINDS.includes(contact.kind))
+      .map((contact) => ({
+        ...contact,
+        name: typeof contact.name === 'string' ? contact.name : String(contact.name ?? ''),
+        location: typeof contact.location === 'string' ? contact.location : String(contact.location ?? ''),
+        phone: typeof contact.phone === 'string' ? contact.phone : String(contact.phone ?? ''),
+      }));
+    const needsDealerContactCleanup = rawDealerContacts.some(
+      (contact) =>
+        !VALID_DEALER_CONTACT_KINDS.includes(contact.kind) ||
+        typeof contact.name !== 'string' ||
+        typeof contact.location !== 'string' ||
+        typeof contact.phone !== 'string'
+    );
+
     return {
       data: {
         users: Array.isArray(parsed.users) ? parsed.users : initial.users,
         vehicles: keptVehicles,
         enquiries: syncedEnquiries,
+        dealerContacts,
         siteContent: syncedContent,
         themeColors: parsed.themeColors ? { ...initial.themeColors, ...parsed.themeColors } : initial.themeColors,
         analyticsEvents: syncedEvents,
@@ -488,7 +521,8 @@ class StoreManager {
         needsVehicleFieldsUpgrade ||
         shouldTrimSampleCatalog ||
         needsCatalogMarker ||
-        needsReferenceCleanup,
+        needsReferenceCleanup ||
+        needsDealerContactCleanup,
     };
   }
 
@@ -528,6 +562,8 @@ class StoreManager {
         idleTimeoutMillis: 15000,
         ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
       });
+      this.pool = pool;
+      this.lastDbError = null;
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS app_store_sections (
@@ -591,10 +627,11 @@ class StoreManager {
         }
         const normalized = this.normalizeParsedStore(assembled);
         this.data = normalized.data;
+        if (normalized.changed) {
+          await this.persist();
+        }
       }
 
-      this.pool = pool;
-      this.lastDbError = null;
       return true;
     } catch (err) {
       this.lastDbError = (err as Error)?.message || 'PostgreSQL connection failed';
@@ -888,6 +925,43 @@ class StoreManager {
     this.data.enquiries = this.data.enquiries.filter((enquiry) => enquiry.id !== id);
     if (this.data.enquiries.length === before) return false;
     await this.persist(['enquiries']);
+    return true;
+  }
+
+  getDealerContacts(kind?: DealerContactKind): DealerContact[] {
+    return kind ? this.data.dealerContacts.filter((contact) => contact.kind === kind) : this.data.dealerContacts;
+  }
+
+  getDealerContactById(id: string): DealerContact | undefined {
+    return this.data.dealerContacts.find((contact) => contact.id === id);
+  }
+
+  async addDealerContact(contact: DealerContact): Promise<DealerContact> {
+    await this.ensureFresh();
+    this.data.dealerContacts.unshift(contact);
+    await this.persist(['dealerContacts']);
+    return contact;
+  }
+
+  async updateDealerContact(id: string, patch: Partial<DealerContact>): Promise<DealerContact | null> {
+    await this.ensureFresh();
+    const idx = this.data.dealerContacts.findIndex((contact) => contact.id === id);
+    if (idx === -1) return null;
+    this.data.dealerContacts[idx] = {
+      ...this.data.dealerContacts[idx],
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.persist(['dealerContacts']);
+    return this.data.dealerContacts[idx];
+  }
+
+  async deleteDealerContact(id: string): Promise<boolean> {
+    await this.ensureFresh();
+    const before = this.data.dealerContacts.length;
+    this.data.dealerContacts = this.data.dealerContacts.filter((contact) => contact.id !== id);
+    if (this.data.dealerContacts.length === before) return false;
+    await this.persist(['dealerContacts']);
     return true;
   }
 

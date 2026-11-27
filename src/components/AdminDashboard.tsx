@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   BarChart3,
+  BookOpen,
+  Building2,
   Car,
   CheckCheck,
   FileEdit,
   LayoutGrid,
+  MapPin,
   MessageSquare,
   Palette,
   ShieldCheck,
@@ -23,12 +26,16 @@ import { StaffUsersPanel } from './dashboard/StaffUsersPanel.tsx';
 import { SiteCmsPanel } from './dashboard/SiteCmsPanel.tsx';
 import { ThemeStudioPanel } from './dashboard/ThemeStudioPanel.tsx';
 import { AdminAccountPanel } from './dashboard/AdminAccountPanel.tsx';
+import { DealerDirectoryPanel } from './DealerDirectoryPanel.tsx';
 
 export type DashboardTabId =
   | 'account'
   | 'analytics'
   | 'inventory'
   | 'enquiries'
+  | 'purchasing-dealers'
+  | 'dealer-catalogs'
+  | 'trichy-dealers'
   | 'users'
   | 'staff'
   | 'cms'
@@ -106,6 +113,9 @@ export function AdminDashboard({
     { id: 'analytics', label: 'Site Analytics', icon: BarChart3 },
     { id: 'inventory', label: 'Inventory', icon: Car },
     { id: 'enquiries', label: 'Enquiries CRM', icon: MessageSquare },
+    { id: 'purchasing-dealers', label: 'Purchasing Dealers', icon: Building2 },
+    { id: 'dealer-catalogs', label: 'Dealers Catlogs', icon: BookOpen },
+    { id: 'trichy-dealers', label: 'Trichy Dealers', icon: MapPin },
     { id: 'users', label: 'Customer Data', icon: Users },
     { id: 'staff', label: 'Staff Setup', icon: ShieldCheck, hidden: !isAdmin },
     { id: 'cms', label: 'Full-Page Editor', icon: FileEdit, hidden: !canEditSite },
@@ -210,6 +220,9 @@ export function AdminDashboard({
           {activeTab === 'analytics' && <AnalyticsPanel />}
           {activeTab === 'inventory' && <InventoryPanel />}
           {activeTab === 'enquiries' && <EnquiriesPanel staffMembers={staffMembers} />}
+          {activeTab === 'purchasing-dealers' && <DealerDirectoryPanel kind="purchase" />}
+          {activeTab === 'dealer-catalogs' && <DealerDirectoryPanel kind="catalog" />}
+          {activeTab === 'trichy-dealers' && <DealerDirectoryPanel kind="trichy" />}
           {activeTab === 'users' && (
             <StaffUsersPanel users={usersList} onRefreshUsers={refreshUsers} mode="users" />
           )}

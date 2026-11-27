@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BookOpen,
   Car,
   CheckCircle2,
   Clock,
@@ -15,12 +16,14 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext.tsx';
 import { apiRequest, uploadVehicleImage } from '../lib/api.ts';
 import { formatInrFull, formatInrLakhs, formatKm, formatRelativeTime, safeExternalHref } from '../lib/format.ts';
-import type { DealerType, Enquiry, EnquiryStatus, Vehicle, VehicleBoardType } from '../../shared/types.ts';
+import { DealerDirectoryPanel } from './DealerDirectoryPanel.tsx';
+import type { Enquiry, EnquiryStatus, Vehicle, VehicleBoardType } from '../../shared/types.ts';
 
 const CAR_IMAGE_PRESETS = [
   { label: 'Flagship SUV Studio', url: '/src/assets/images/vehicle_suv_flagship_1795250937139.jpg' },
@@ -49,11 +52,13 @@ const ENQUIRY_FILTER_STATUSES: Array<'All' | EnquiryStatus> = [
   'Hot',
 ];
 const VEHICLE_BOARD_TYPES: VehicleBoardType[] = ['Tboard Vehicles', 'Non Tboard Vehicles'];
-const DEALER_TYPES: DealerType[] = ['dealer', 'tricy dealer', 'purchase dealer'];
 const isDealPriceVehicle = (v: Vehicle): boolean => v.dealerPrice > 0 || v.price > v.finalPrice;
 const DEFAULT_CARD_CALL_NUMBER = '9385588888';
 const DEFAULT_CARD_WHATSAPP_NUMBER = '919385588888';
-const TODAY_ISO = () => new Date().toISOString().slice(0, 10);
+const TODAY_ISO = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
 const INITIAL_VISIBLE_CARDS = 8;
 
 interface StorefrontViewProps {
@@ -83,7 +88,9 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
   const canEditPrice = isAdmin || Boolean(user?.permissions.canEditPrice);
   const canDeleteCar = isAdmin || Boolean(user?.permissions.canDeleteCar);
 
-  const [workspaceTab, setWorkspaceTab] = useState<'all-cars' | 'add-car' | 'add-enquiry' | 'all-enquiries'>('all-cars');
+  const [workspaceTab, setWorkspaceTab] = useState<
+    'all-cars' | 'add-car' | 'add-enquiry' | 'all-enquiries' | 'purchasing-dealers' | 'dealer-catalogs' | 'trichy-dealers'
+  >('all-cars');
 
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [collectionTab, setCollectionTab] = useState<
@@ -148,6 +155,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
   const [imageUploading, setImageUploading] = useState(false);
   const [carSuccess, setCarSuccess] = useState<string | null>(null);
   const [carForm, setCarForm] = useState({
+    date: TODAY_ISO(),
     brand: '',
     model: '',
     year: '2024',
@@ -160,16 +168,14 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     km: '',
     price: '',
     finalPrice: '',
-    dealerPrice: '',
     dealer: '',
-    dealerType: 'dealer' as DealerType,
     dealerNumber: '',
     dealerPlaces: '',
     notes: '',
     fc: '',
     insurance: '',
     permit: '',
-    boardType: 'Non Tboard Vehicles' as VehicleBoardType,
+    boardType: '' as VehicleBoardType,
     status: 'Available' as Vehicle['status'],
     featured: false,
     imageUrl: CAR_IMAGE_PRESETS[0].url,
@@ -362,7 +368,16 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     }, 60);
   };
 
-  const handleSelectWorkspaceTab = (tab: 'all-cars' | 'add-car' | 'add-enquiry' | 'all-enquiries') => {
+  const handleSelectWorkspaceTab = (
+    tab:
+      | 'all-cars'
+      | 'add-car'
+      | 'add-enquiry'
+      | 'all-enquiries'
+      | 'purchasing-dealers'
+      | 'dealer-catalogs'
+      | 'trichy-dealers'
+  ) => {
     setWorkspaceTab(tab);
     if (tab === 'all-cars') scrollToSection('inventory');
     if (tab === 'add-car') {
@@ -371,12 +386,16 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     }
     if (tab === 'add-enquiry') scrollToSection('enquiries');
     if (tab === 'all-enquiries') scrollToSection('all-enquiries');
+    if (tab === 'purchasing-dealers') scrollToSection('purchasing-dealers');
+    if (tab === 'dealer-catalogs') scrollToSection('dealer-catalogs');
+    if (tab === 'trichy-dealers') scrollToSection('trichy-dealers');
   };
 
   const handleOpenAddCarForm = () => {
     setEditingVehicle(null);
     setCarSuccess(null);
     setCarForm({
+      date: TODAY_ISO(),
       brand: '',
       model: '',
       year: '2024',
@@ -389,16 +408,14 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
       km: '',
       price: '',
       finalPrice: '',
-      dealerPrice: '',
       dealer: user?.name || '',
-      dealerType: 'dealer' as DealerType,
       dealerNumber: '',
       dealerPlaces: '',
       notes: '',
       fc: '',
       insurance: '',
       permit: '',
-      boardType: 'Non Tboard Vehicles',
+      boardType: '',
       status: 'Available',
       featured: false,
       imageUrl: CAR_IMAGE_PRESETS[0].url,
@@ -411,6 +428,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     setEditingVehicle(v);
     setCarSuccess(null);
     setCarForm({
+      date: v.date || String(v.createdAt || '').slice(0, 10) || TODAY_ISO(),
       brand: v.brand,
       model: v.model,
       year: v.year,
@@ -423,16 +441,14 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
       km: v.km,
       price: String(v.price),
       finalPrice: String(v.finalPrice),
-      dealerPrice: String(v.dealerPrice ?? 0),
       dealer: v.dealer,
-      dealerType: v.dealerType || 'dealer',
       dealerNumber: v.dealerNumber || '',
       dealerPlaces: v.dealerPlaces || '',
       notes: v.notes || '',
       fc: v.fc || '',
       insurance: v.insurance || '',
       permit: v.permit || '',
-      boardType: v.boardType || 'Non Tboard Vehicles',
+      boardType: v.boardType || '',
       status: v.status,
       featured: v.featured,
       imageUrl: v.imageUrl,
@@ -447,6 +463,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
     setCarSuccess(null);
     try {
       const payload: Record<string, unknown> = {
+        date: carForm.date,
         brand: carForm.brand,
         model: carForm.model,
         year: carForm.year,
@@ -457,9 +474,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
         fuel: carForm.fuel,
         trans: carForm.trans,
         km: carForm.km,
-        dealerPrice: Number(carForm.dealerPrice || 0),
         dealer: carForm.dealer,
-        dealerType: carForm.dealerType,
         dealerNumber: carForm.dealerNumber,
         dealerPlaces: carForm.dealerPlaces,
         notes: carForm.notes,
@@ -503,6 +518,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
         });
         setCarForm((prev) => ({
           ...prev,
+          date: TODAY_ISO(),
           brand: '',
           model: '',
           variant: '',
@@ -510,15 +526,13 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
           km: '',
           price: '',
           finalPrice: '',
-          dealerPrice: '',
-          dealerType: 'dealer' as DealerType,
           dealerNumber: '',
           dealerPlaces: '',
           notes: '',
           fc: '',
           insurance: '',
           permit: '',
-          boardType: 'Non Tboard Vehicles',
+          boardType: '',
         }));
         resetFilters();
         setSortBy('newest');
@@ -534,6 +548,20 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
       });
     } finally {
       setCarSaving(false);
+    }
+  };
+
+  const handleCarFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    if (event.key !== 'Enter') return;
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'TEXTAREA') return;
+    const fields = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled])')
+    ).filter((field) => field.offsetParent !== null);
+    const next = fields[fields.indexOf(target) + 1];
+    if (next) {
+      event.preventDefault();
+      next.focus();
     }
   };
 
@@ -988,6 +1016,71 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   {isOperator ? `View All Enquiries (${enquiries.length})` : `My Enquiries (${enquiries.length})`}
                 </button>
 
+                {isOperator && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectWorkspaceTab('purchasing-dealers')}
+                      className="rounded-full px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border"
+                      style={
+                        workspaceTab === 'purchasing-dealers'
+                          ? {
+                              backgroundColor: 'var(--site-accent-bright)',
+                              borderColor: 'var(--site-accent-bright)',
+                              color: 'var(--site-accent-contrast)',
+                            }
+                          : {
+                              backgroundColor: 'var(--site-bg)',
+                              borderColor: 'var(--site-border)',
+                              color: 'var(--site-text)',
+                            }
+                      }
+                    >
+                      Purchasing Dealers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectWorkspaceTab('dealer-catalogs')}
+                      className="rounded-full px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border"
+                      style={
+                        workspaceTab === 'dealer-catalogs'
+                          ? {
+                              backgroundColor: 'var(--site-accent-bright)',
+                              borderColor: 'var(--site-accent-bright)',
+                              color: 'var(--site-accent-contrast)',
+                            }
+                          : {
+                              backgroundColor: 'var(--site-bg)',
+                              borderColor: 'var(--site-border)',
+                              color: 'var(--site-text)',
+                            }
+                      }
+                    >
+                      Dealers Catlogs
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectWorkspaceTab('trichy-dealers')}
+                      className="rounded-full px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 border"
+                      style={
+                        workspaceTab === 'trichy-dealers'
+                          ? {
+                              backgroundColor: 'var(--site-accent-bright)',
+                              borderColor: 'var(--site-accent-bright)',
+                              color: 'var(--site-accent-contrast)',
+                            }
+                          : {
+                              backgroundColor: 'var(--site-bg)',
+                              borderColor: 'var(--site-border)',
+                              color: 'var(--site-text)',
+                            }
+                      }
+                    >
+                      Trichy Dealers
+                    </button>
+                  </>
+                )}
+
                 {isAdmin && onOpenManageStaff && (
                   <button
                     type="button"
@@ -1006,9 +1099,9 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
 
               <p className="text-xs leading-relaxed" style={{ color: 'var(--site-muted)' }}>
                 {isAdmin
-                  ? 'Owner can add, edit, delete cars, view every enquiry and manage staff.'
+                  ? 'Owner can add, edit, delete cars, view every enquiry, manage dealer directories and staff.'
                   : isOperator
-                  ? 'Staff can browse all cars, add vehicles per role permissions, log leads, and manage enquiries.'
+                  ? 'Staff can browse all cars, add vehicles per role permissions, log leads, manage enquiries and dealer directories.'
                   : 'Browse all verified cars, add showroom enquiries, and view your submitted enquiries.'}
               </p>
             </div>
@@ -1126,7 +1219,22 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
               </div>
             )}
 
-            <form onSubmit={handleSaveFrontendCar} className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <form
+              onSubmit={handleSaveFrontendCar}
+              onKeyDown={handleCarFormKeyDown}
+              className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+            >
+              <div>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Date</label>
+                <input
+                  type="date"
+                  required
+                  value={carForm.date}
+                  onChange={(e) => setCarForm({ ...carForm, date: e.target.value })}
+                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                />
+              </div>
               <div>
                 <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Brand</label>
                 <input
@@ -1274,22 +1382,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>
-                  Dealer Price (₹) {!canEditPrice && editingVehicle ? '(Locked)' : ''}
-                </label>
-                <input
-                  type="number"
-                  disabled={Boolean(editingVehicle) && !canEditPrice}
-                  value={carForm.dealerPrice}
-                  onChange={(e) => setCarForm({ ...carForm, dealerPrice: e.target.value })}
-                  placeholder="1100000"
-                  className="w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none disabled:opacity-50"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer / Source</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer Name</label>
                 <input
                   value={carForm.dealer}
                   onChange={(e) => setCarForm({ ...carForm, dealer: e.target.value })}
@@ -1299,22 +1392,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Type</label>
-                <select
-                  value={carForm.dealerType}
-                  onChange={(e) => setCarForm({ ...carForm, dealerType: e.target.value as DealerType })}
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                >
-                  {DEALER_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type.replace(/\b\w/g, (ch) => ch.toUpperCase())}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Number</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer Number</label>
                 <input
                   value={carForm.dealerNumber}
                   onChange={(e) => setCarForm({ ...carForm, dealerNumber: e.target.value })}
@@ -1324,7 +1402,7 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Places</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer place</label>
                 <input
                   value={carForm.dealerPlaces}
                   onChange={(e) => setCarForm({ ...carForm, dealerPlaces: e.target.value })}
@@ -1345,43 +1423,21 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>FC</label>
-                <input
-                  value={carForm.fc}
-                  onChange={(e) => setCarForm({ ...carForm, fc: e.target.value })}
-                  placeholder="e.g. 04/2028"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Insurance</label>
-                <input
-                  value={carForm.insurance}
-                  onChange={(e) => setCarForm({ ...carForm, insurance: e.target.value })}
-                  placeholder="e.g. 12/2026 · Full Coverage"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Permit</label>
-                <input
-                  value={carForm.permit}
-                  onChange={(e) => setCarForm({ ...carForm, permit: e.target.value })}
-                  placeholder="e.g. TN · 05/2027"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
                 <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Vehicle Board Type</label>
                 <select
                   value={carForm.boardType}
-                  onChange={(e) => setCarForm({ ...carForm, boardType: e.target.value as VehicleBoardType })}
+                  onChange={(e) => {
+                    const boardType = e.target.value as VehicleBoardType;
+                    setCarForm((prev) => ({
+                      ...prev,
+                      boardType,
+                      ...(boardType ? {} : { fc: '', insurance: '', permit: '' }),
+                    }));
+                  }}
                   className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
                   style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
                 >
+                  <option value="">Select Vehicle Board Type</option>
                   {VEHICLE_BOARD_TYPES.map((type) => (
                     <option key={type} value={type}>
                       {type}
@@ -1389,6 +1445,40 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                   ))}
                 </select>
               </div>
+              {carForm.boardType && (
+                <>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>FC</label>
+                    <input
+                      value={carForm.fc}
+                      onChange={(e) => setCarForm({ ...carForm, fc: e.target.value })}
+                      placeholder="e.g. 04/2028"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Insurance</label>
+                    <input
+                      value={carForm.insurance}
+                      onChange={(e) => setCarForm({ ...carForm, insurance: e.target.value })}
+                      placeholder="e.g. 12/2026 · Full Coverage"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Permit</label>
+                    <input
+                      value={carForm.permit}
+                      onChange={(e) => setCarForm({ ...carForm, permit: e.target.value })}
+                      placeholder="e.g. TN · 05/2027"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="sm:col-span-2 lg:col-span-4 space-y-3 rounded-xl border p-3" style={{ borderColor: 'var(--site-border)' }}>
                 <div className="flex flex-wrap items-center gap-3">
@@ -1898,6 +1988,8 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                         <span className="font-mono-tabular">{formatKm(v.km)}</span>
                         <span aria-hidden="true">·</span>
                         <span>{v.owner === '1' ? '1st Owner' : `${v.owner}nd Owner`}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono-tabular">{v.date}</span>
                       </div>
 
                       {(v.fc || v.insurance || v.permit || v.boardType) && (
@@ -1910,13 +2002,12 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                       )}
                       {isOperator && v.dealer && (
                         <p className="mt-2 truncate text-[11px]" style={{ color: 'var(--site-muted)' }}>
-                          Dealer: {v.dealer}
-                          {v.dealerType ? ` · ${v.dealerType}` : ''}
+                          Dealer/Customer Name: {v.dealer}
                         </p>
                       )}
                       {isOperator && v.dealerPlaces && (
                         <p className="mt-1 truncate text-[11px]" style={{ color: 'var(--site-muted)' }}>
-                          Places: {v.dealerPlaces}
+                          Dealer/Customer place: {v.dealerPlaces}
                         </p>
                       )}
                       {isOperator && v.notes && (
@@ -2598,6 +2689,87 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
         )}
       </section>
 
+      {isOperator && (
+        <section
+          id="purchasing-dealers"
+          className="mx-auto max-w-[1360px] px-6 py-10 border-t"
+          style={{ borderColor: 'var(--site-border)' }}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--site-accent-bright)' }}>
+                Dealer Network
+              </p>
+              <h2 className="mt-1 font-display text-2xl font-bold tracking-tight sm:text-3xl">Purchasing Dealers</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed" style={{ color: 'var(--site-muted)' }}>
+                Add, search, edit and remove purchase dealer contacts.
+              </p>
+            </div>
+            <Users className="h-7 w-7" style={{ color: 'var(--site-accent-bright)' }} />
+          </div>
+          <div
+            className="mt-6 rounded-2xl border p-4 sm:p-5"
+            style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
+          >
+            <DealerDirectoryPanel kind="purchase" />
+          </div>
+        </section>
+      )}
+
+      {isOperator && (
+        <section
+          id="dealer-catalogs"
+          className="mx-auto max-w-[1360px] px-6 py-10 border-t"
+          style={{ borderColor: 'var(--site-border)' }}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--site-accent-bright)' }}>
+                Dealer Network
+              </p>
+              <h2 className="mt-1 font-display text-2xl font-bold tracking-tight sm:text-3xl">Dealers Catlogs</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed" style={{ color: 'var(--site-muted)' }}>
+                Maintain dealer catalogue names, locations and phone numbers.
+              </p>
+            </div>
+            <BookOpen className="h-7 w-7" style={{ color: 'var(--site-accent-bright)' }} />
+          </div>
+          <div
+            className="mt-6 rounded-2xl border p-4 sm:p-5"
+            style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
+          >
+            <DealerDirectoryPanel kind="catalog" />
+          </div>
+        </section>
+      )}
+
+      {isOperator && (
+        <section
+          id="trichy-dealers"
+          className="mx-auto max-w-[1360px] px-6 py-10 border-t"
+          style={{ borderColor: 'var(--site-border)' }}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--site-accent-bright)' }}>
+                Dealer Network
+              </p>
+              <h2 className="mt-1 font-display text-2xl font-bold tracking-tight sm:text-3xl">Trichy Dealers</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed" style={{ color: 'var(--site-muted)' }}>
+                Keep Trichy dealer names and phone numbers up to date.
+              </p>
+            </div>
+            <MapPin className="h-7 w-7" style={{ color: 'var(--site-accent-bright)' }} />
+          </div>
+          <div
+            className="mt-6 rounded-2xl border p-4 sm:p-5"
+            style={{ backgroundColor: 'var(--site-surface)', borderColor: 'var(--site-border)' }}
+          >
+            <DealerDirectoryPanel kind="trichy" />
+          </div>
+        </section>
+      )}
+
       {editingEnquiry && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
           <div
@@ -2882,6 +3054,10 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
                 style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
               >
                 <div>
+                  <p className="text-xs" style={{ color: 'var(--site-muted)' }}>Date</p>
+                  <p className="mt-1 text-sm font-semibold font-mono-tabular">{selectedVehicle.date}</p>
+                </div>
+                <div>
                   <p className="text-xs" style={{ color: 'var(--site-muted)' }}>Fuel</p>
                   <p className="mt-1 text-sm font-semibold">{selectedVehicle.fuel}</p>
                 </div>
@@ -2947,11 +3123,10 @@ export function StorefrontView({ externalEnquiryTrigger, onOpenManageStaff }: St
 
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="space-y-1 text-xs" style={{ color: 'var(--site-muted)' }}>
-                  <p>
-                    Dealer: {selectedVehicle.dealer}
-                    {selectedVehicle.dealerType ? ` · ${selectedVehicle.dealerType}` : ''}
-                  </p>
-                  {selectedVehicle.dealerPlaces && <p>Places: {selectedVehicle.dealerPlaces}</p>}
+                  <p>Dealer/Customer Name: {selectedVehicle.dealer}</p>
+                  {selectedVehicle.dealerPlaces && (
+                    <p>Dealer/Customer place: {selectedVehicle.dealerPlaces}</p>
+                  )}
                   {isOperator && selectedVehicle.notes && (
                     <p className="whitespace-pre-line">Notes: {selectedVehicle.notes}</p>
                   )}

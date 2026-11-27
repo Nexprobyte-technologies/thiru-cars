@@ -3,10 +3,13 @@ import { ImagePlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext.tsx';
 import { apiRequest, uploadVehicleImage } from '../../lib/api.ts';
 import { formatInrLakhs, formatKm } from '../../lib/format.ts';
-import type { DealerType, Vehicle, VehicleBoardType } from '../../../shared/types.ts';
+import type { Vehicle, VehicleBoardType } from '../../../shared/types.ts';
 
 const VEHICLE_BOARD_TYPES: VehicleBoardType[] = ['Tboard Vehicles', 'Non Tboard Vehicles'];
-const DEALER_TYPES: DealerType[] = ['dealer', 'tricy dealer', 'purchase dealer'];
+const TODAY_ISO = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
 
 const IMAGE_PRESETS = [
   { label: 'Flagship SUV Studio', url: '/src/assets/images/vehicle_suv_flagship_1795250937139.jpg' },
@@ -35,6 +38,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
   const canDelete = user?.role === 'admin' || user?.permissions.canDeleteCar;
 
   const [form, setForm] = useState({
+    date: TODAY_ISO(),
     brand: '',
     model: '',
     year: '2024',
@@ -47,9 +51,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
     km: '',
     price: '',
     finalPrice: '',
-    dealerPrice: '',
     dealer: '',
-    dealerType: 'dealer' as DealerType,
     dealerNumber: '',
     dealerPlaces: '',
     notes: '',
@@ -57,7 +59,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
     fc: '',
     insurance: '',
     permit: '',
-    boardType: 'Non Tboard Vehicles' as VehicleBoardType,
+    boardType: '' as VehicleBoardType,
     status: 'Available' as Vehicle['status'],
     featured: false,
     imageUrl: IMAGE_PRESETS[0].url,
@@ -75,6 +77,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
   const openCreate = () => {
     setEditingVehicle(null);
     setForm({
+      date: TODAY_ISO(),
       brand: '',
       model: '',
       year: '2024',
@@ -87,9 +90,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       km: '',
       price: '',
       finalPrice: '',
-      dealerPrice: '',
       dealer: user?.name || '',
-      dealerType: 'dealer' as DealerType,
       dealerNumber: '',
       dealerPlaces: '',
       notes: '',
@@ -97,7 +98,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       fc: '',
       insurance: '',
       permit: '',
-      boardType: 'Non Tboard Vehicles',
+      boardType: '',
       status: 'Available',
       featured: false,
       imageUrl: IMAGE_PRESETS[0].url,
@@ -108,6 +109,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
   const openEdit = (v: Vehicle) => {
     setEditingVehicle(v);
     setForm({
+      date: v.date || String(v.createdAt || '').slice(0, 10) || TODAY_ISO(),
       brand: v.brand,
       model: v.model,
       year: v.year,
@@ -120,9 +122,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       km: v.km,
       price: String(v.price),
       finalPrice: String(v.finalPrice),
-      dealerPrice: String(v.dealerPrice ?? 0),
       dealer: v.dealer,
-      dealerType: v.dealerType || 'dealer',
       dealerNumber: v.dealerNumber || '',
       dealerPlaces: v.dealerPlaces || '',
       notes: v.notes || '',
@@ -130,7 +130,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       fc: v.fc || '',
       insurance: v.insurance || '',
       permit: v.permit || '',
-      boardType: v.boardType || 'Non Tboard Vehicles',
+      boardType: v.boardType || '',
       status: v.status,
       featured: v.featured,
       imageUrl: v.imageUrl,
@@ -155,6 +155,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
+        date: form.date,
         brand: form.brand,
         model: form.model,
         year: form.year,
@@ -165,9 +166,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
         fuel: form.fuel,
         trans: form.trans,
         km: form.km,
-        dealerPrice: Number(form.dealerPrice || 0),
         dealer: form.dealer,
-        dealerType: form.dealerType,
         dealerNumber: form.dealerNumber,
         dealerPlaces: form.dealerPlaces,
         notes: form.notes,
@@ -210,6 +209,20 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    if (event.key !== 'Enter') return;
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'TEXTAREA') return;
+    const fields = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('input:not([type="hidden"]):not([disabled]), select:not([disabled])')
+    ).filter((field) => field.offsetParent !== null);
+    const next = fields[fields.indexOf(target) + 1];
+    if (next) {
+      event.preventDefault();
+      next.focus();
     }
   };
 
@@ -346,14 +359,16 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                   <p className="font-semibold">
                     {v.year} {v.brand} {v.model}
                   </p>
+                  <p className="text-[11px] font-mono-tabular" style={{ color: 'var(--site-muted)' }}>
+                    Date: {v.date}
+                  </p>
                   <p className="text-[11px]" style={{ color: 'var(--site-muted)' }}>
-                    {v.variant || 'Standard'} · {v.dealer}
-                    {v.dealerType ? ` · ${v.dealerType}` : ''}
+                    {v.variant || 'Standard'} · Dealer/Customer Name: {v.dealer}
                   </p>
                   {(v.dealerNumber || v.dealerPlaces) && (
                     <p className="text-[11px]" style={{ color: 'var(--site-muted)' }}>
-                      {v.dealerNumber ? `Dealer No: ${v.dealerNumber}` : 'Dealer No: —'}
-                      {v.dealerPlaces ? ` · ${v.dealerPlaces}` : ''}
+                      {v.dealerNumber ? `Dealer/Customer Number: ${v.dealerNumber}` : 'Dealer/Customer Number: —'}
+                      {v.dealerPlaces ? ` · Dealer/Customer place: ${v.dealerPlaces}` : ''}
                     </p>
                   )}
                   {v.notes && (
@@ -443,7 +458,22 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <form
+              onSubmit={handleSave}
+              onKeyDown={handleFormKeyDown}
+              className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3"
+            >
+              <div>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Date</label>
+                <input
+                  type="date"
+                  required
+                  value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                />
+              </div>
               <div>
                 <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Brand</label>
                 <input
@@ -577,21 +607,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>
-                  Dealer Price (₹) {!canEditPrice && editingVehicle ? '(Locked)' : ''}
-                </label>
-                <input
-                  type="number"
-                  disabled={Boolean(editingVehicle) && !canEditPrice}
-                  value={form.dealerPrice}
-                  onChange={(e) => setForm({ ...form, dealerPrice: e.target.value })}
-                  placeholder="3100000"
-                  className="w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none disabled:opacity-50"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer / Source</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer Name</label>
                 <input
                   value={form.dealer}
                   onChange={(e) => setForm({ ...form, dealer: e.target.value })}
@@ -600,22 +616,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Type</label>
-                <select
-                  value={form.dealerType}
-                  onChange={(e) => setForm({ ...form, dealerType: e.target.value as DealerType })}
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                >
-                  {DEALER_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type.replace(/\b\w/g, (ch) => ch.toUpperCase())}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Number</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer Number</label>
                 <input
                   value={form.dealerNumber}
                   onChange={(e) => setForm({ ...form, dealerNumber: e.target.value })}
@@ -625,7 +626,7 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer Places</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Dealer/Customer place</label>
                 <input
                   value={form.dealerPlaces}
                   onChange={(e) => setForm({ ...form, dealerPlaces: e.target.value })}
@@ -646,6 +647,29 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                 />
               </div>
               <div>
+                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Vehicle Board Type</label>
+                <select
+                  value={form.boardType}
+                  onChange={(e) => {
+                    const boardType = e.target.value as VehicleBoardType;
+                    setForm((prev) => ({
+                      ...prev,
+                      boardType,
+                      ...(boardType ? {} : { fc: '', insurance: '', permit: '' }),
+                    }));
+                  }}
+                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                >
+                  <option value="">Select Vehicle Board Type</option>
+                  {VEHICLE_BOARD_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Contact Phone</label>
                 <input
                   value={form.phone}
@@ -655,51 +679,40 @@ export function InventoryPanel({ initialAction, initialEditVehicle, onClearIniti
                   style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
                 />
               </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>FC</label>
-                <input
-                  value={form.fc}
-                  onChange={(e) => setForm({ ...form, fc: e.target.value })}
-                  placeholder="e.g. 04/2028"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Insurance</label>
-                <input
-                  value={form.insurance}
-                  onChange={(e) => setForm({ ...form, insurance: e.target.value })}
-                  placeholder="e.g. 12/2026 · Full Coverage"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Permit</label>
-                <input
-                  value={form.permit}
-                  onChange={(e) => setForm({ ...form, permit: e.target.value })}
-                  placeholder="e.g. TN · 05/2027"
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Vehicle Board Type</label>
-                <select
-                  value={form.boardType}
-                  onChange={(e) => setForm({ ...form, boardType: e.target.value as VehicleBoardType })}
-                  className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
-                  style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
-                >
-                  {VEHICLE_BOARD_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {form.boardType && (
+                <>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>FC</label>
+                    <input
+                      value={form.fc}
+                      onChange={(e) => setForm({ ...form, fc: e.target.value })}
+                      placeholder="e.g. 04/2028"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Insurance</label>
+                    <input
+                      value={form.insurance}
+                      onChange={(e) => setForm({ ...form, insurance: e.target.value })}
+                      placeholder="e.g. 12/2026 · Full Coverage"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--site-muted)' }}>Permit</label>
+                    <input
+                      value={form.permit}
+                      onChange={(e) => setForm({ ...form, permit: e.target.value })}
+                      placeholder="e.g. TN · 05/2027"
+                      className="w-full rounded-xl border px-3 py-2 text-xs outline-none"
+                      style={{ backgroundColor: 'var(--site-bg)', borderColor: 'var(--site-border)' }}
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="sm:col-span-3 space-y-3 rounded-xl border p-3" style={{ borderColor: 'var(--site-border)' }}>
                 <div className="flex flex-wrap items-center gap-3">

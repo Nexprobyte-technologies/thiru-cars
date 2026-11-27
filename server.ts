@@ -11,6 +11,7 @@ import {
   DEFAULT_STAFF_PERMISSIONS,
   DEFAULT_THEME_COLORS,
   FULL_ADMIN_PERMISSIONS,
+  VALID_DEALER_CONTACT_KINDS,
   VALID_DEALER_TYPES,
   store,
   type StoredUser,
@@ -25,6 +26,8 @@ import {
 } from './server/auth.ts';
 import { attachWebSocketServer, type WsHub } from './server/ws.ts';
 import type {
+  DealerContact,
+  DealerContactKind,
   DealerType,
   EnquiryStatus,
   SiteContent,
@@ -81,7 +84,14 @@ function cleanText(val: unknown, maxLen = 200): string {
   return val.trim().slice(0, maxLen);
 }
 
-const VALID_BOARD_TYPES: VehicleBoardType[] = ['Tboard Vehicles', 'Non Tboard Vehicles'];
+function cleanDateOnly(val: unknown): string {
+  const text = cleanText(val, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
+  const parsed = new Date(`${text}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text ? '' : text;
+}
+
+const VALID_BOARD_TYPES: VehicleBoardType[] = ['', 'Tboard Vehicles', 'Non Tboard Vehicles'];
 
 function isOperatorRole(role: UserRole | 'guest'): boolean {
   return role === 'admin' || role === 'staff';
@@ -107,6 +117,10 @@ const VALID_ENQUIRY_STATUSES: EnquiryStatus[] = [
   'OLX enquiry',
   'Hot',
 ];
+
+function parseDealerContactKind(value: unknown): DealerContactKind | null {
+  return VALID_DEALER_CONTACT_KINDS.includes(value as DealerContactKind) ? (value as DealerContactKind) : null;
+}
 
 let vercelApp: any;
 
@@ -536,6 +550,7 @@ async function bootstrap() {
     const fuel = cleanText(req.body?.fuel, 30) || 'Petrol';
     const trans = cleanText(req.body?.trans, 20) || 'MT';
     const km = cleanText(req.body?.km, 24) || '0';
+    const date = cleanDateOnly(req.body?.date) || new Date().toISOString().slice(0, 10);
     const price = Number(req.body?.price);
     const finalPrice = Number(req.body?.finalPrice || req.body?.price);
     const rawDealerPrice = Number(req.body?.dealerPrice ?? 0);
@@ -555,7 +570,7 @@ async function bootstrap() {
     const requestedBoardType = req.body?.boardType as VehicleBoardType;
     const boardType: VehicleBoardType = VALID_BOARD_TYPES.includes(requestedBoardType)
       ? requestedBoardType
-      : 'Non Tboard Vehicles';
+      : '';
     const featured = Boolean(req.body?.featured);
     const rawImg = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
     const imageUrl = rawImg && isSafeImageUrl(rawImg) ? rawImg : '/src/assets/images/vehicle_suv_flagship_1795250937139.jpg';
@@ -594,6 +609,7 @@ async function bootstrap() {
       featured,
       imageUrl,
       views: 0,
+      date,
       createdAt: now,
       updatedAt: now,
     };
@@ -637,6 +653,10 @@ async function bootstrap() {
     if (req.body?.fuel !== undefined) patch.fuel = cleanText(req.body.fuel, 30);
     if (req.body?.trans !== undefined) patch.trans = cleanText(req.body.trans, 20);
     if (req.body?.km !== undefined) patch.km = cleanText(req.body.km, 24);
+    if (req.body?.date !== undefined) {
+      const date = cleanDateOnly(req.body.date);
+      if (date) patch.date = date;
+    }
     if (req.body?.dealer !== undefined) patch.dealer = cleanText(req.body.dealer, 80);
     if (req.body?.dealerType !== undefined && VALID_DEALER_TYPES.includes(req.body.dealerType as DealerType)) {
       patch.dealerType = req.body.dealerType as DealerType;
@@ -885,6 +905,79 @@ async function bootstrap() {
       actorName: req.authUser!.name,
       targetRole: 'admin',
     });
+    res.json({ deleted: true });
+  });
+
+  // --- Dealer Contacts ---
+  app.get('/api/dealer-contacts', requireAuth, requireRoles(['admin', 'staff']), (req: AuthenticatedRequest, res) => {
+    if (req.query.kind !== undefined && parseDealerContactKind(req.query.kind) === null) {
+      return res.status(400).json({ error: 'A valid dealer directory is required.' });
+    }
+    const kind = parseDealerContactKind(req.query.kind);
+    res.json({ contacts: store.getDealerContacts(kind || undefined) });
+  });
+
+  app.post('/api/dealer-contacts', requireAuth, requirePermission('canAddCar'), async (req: AuthenticatedRequest, res) => {
+    const kind = parseDealerContactKind(req.body?.kind);
+    const name = cleanText(req.body?.name, 80);
+    const location = cleanText(req.body?.location, 120);
+    const phone = cleanText(req.body?.phone, 30);
+    if (!kind) {
+      return res.status(400).json({ error: 'A valid dealer directory is required.' });
+    }
+    if (name.length < 2 || phone.length < 6) {
+      return res.status(400).json({ error: 'Name and a valid phone number are required.' });
+    }
+    const now = new Date().toISOString();
+    const contact = await store.addDealerContact({
+      id: `dct-${crypto.randomUUID().slice(0, 8)}`,
+      kind,
+      name,
+      location,
+      phone,
+      createdAt: now,
+      updatedAt: now,
+    });
+    wsHub.broadcastStaffOrAdmin('dealer-contacts:updated', { action: 'create', contact });
+    res.status(201).json({ contact });
+  });
+
+  app.patch('/api/dealer-contacts/:id', requireAuth, requirePermission('canEditCar'), async (req: AuthenticatedRequest, res) => {
+    const existing = store.getDealerContactById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Dealer contact not found' });
+    }
+    const patch: Partial<DealerContact> = {};
+    if (req.body?.name !== undefined) {
+      const name = cleanText(req.body.name, 80);
+      if (name.length < 2) {
+        return res.status(400).json({ error: 'Name must contain at least 2 characters.' });
+      }
+      patch.name = name;
+    }
+    if (req.body?.location !== undefined) patch.location = cleanText(req.body.location, 120);
+    if (req.body?.phone !== undefined) {
+      const phone = cleanText(req.body.phone, 30);
+      if (phone.length < 6) {
+        return res.status(400).json({ error: 'A valid phone number is required.' });
+      }
+      patch.phone = phone;
+    }
+    const updated = await store.updateDealerContact(existing.id, patch);
+    if (!updated) {
+      return res.status(404).json({ error: 'Dealer contact not found' });
+    }
+    wsHub.broadcastStaffOrAdmin('dealer-contacts:updated', { action: 'update', contact: updated });
+    res.json({ contact: updated });
+  });
+
+  app.delete('/api/dealer-contacts/:id', requireAuth, requirePermission('canDeleteCar'), async (req: AuthenticatedRequest, res) => {
+    const existing = store.getDealerContactById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Dealer contact not found' });
+    }
+    await store.deleteDealerContact(existing.id);
+    wsHub.broadcastStaffOrAdmin('dealer-contacts:updated', { action: 'delete', id: existing.id });
     res.json({ deleted: true });
   });
 

@@ -4,6 +4,7 @@ import type {
   AnalyticsSummary,
   AppNotification,
   BootstrapStatus,
+  DealerContact,
   Enquiry,
   SiteContent,
   ThemeColors,
@@ -28,6 +29,7 @@ interface AppContextValue {
   setPreviewTheme: (t: ThemeColors | null) => void;
   vehicles: Vehicle[];
   enquiries: Enquiry[];
+  dealerContacts: DealerContact[];
   notifications: AppNotification[];
   unreadCount: number;
   analytics: AnalyticsSummary | null;
@@ -79,6 +81,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [previewTheme, setPreviewTheme] = useState<ThemeColors | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
+  const [dealerContacts, setDealerContacts] = useState<DealerContact[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
   const [wsEnabled, setWsEnabled] = useState(false);
@@ -147,13 +150,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setNotifications(notifRes.notifications);
 
       if (user && (user.role === 'admin' || user.role === 'staff')) {
-        const [enqRes, analyticsRes] = await Promise.all([
+        const [enqRes, dealerRes, analyticsRes] = await Promise.all([
           apiRequest<{ enquiries: Enquiry[] }>('/api/enquiries', { token: currentToken }),
+          apiRequest<{ contacts: DealerContact[] }>('/api/dealer-contacts', { token: currentToken }),
           apiRequest<{ summary: AnalyticsSummary; wsClients: number }>('/api/admin/analytics', {
             token: currentToken,
           }),
         ]);
         setEnquiries(enqRes.enquiries);
+        setDealerContacts(dealerRes.contacts);
         setAnalytics(analyticsRes.summary);
         setWsClients(analyticsRes.wsClients);
       } else if (user) {
@@ -177,6 +182,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } else {
       setVehicles([]);
       setEnquiries([]);
+      setDealerContacts([]);
       setNotifications([]);
       setAnalytics(null);
     }
@@ -251,6 +257,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               setEnquiries((prev) => prev.map((e) => (e.id === enquiry.id ? enquiry : e)));
             } else if (action === 'delete' && id) {
               setEnquiries((prev) => prev.filter((e) => e.id !== id));
+            }
+          } else if (msg.event === 'dealer-contacts:updated') {
+            const { action, contact, id } = msg.payload || {};
+            if (action === 'create' && contact) {
+              setDealerContacts((prev) => (prev.some((c) => c.id === contact.id) ? prev : [contact, ...prev]));
+            } else if (action === 'update' && contact) {
+              setDealerContacts((prev) => prev.map((c) => (c.id === contact.id ? contact : c)));
+            } else if (action === 'delete' && id) {
+              setDealerContacts((prev) => prev.filter((c) => c.id !== id));
             }
           } else if (msg.event === 'analytics:tick' && msg.payload?.summary) {
             setAnalytics(msg.payload.summary);
@@ -397,6 +412,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPreviewTheme,
     vehicles,
     enquiries,
+    dealerContacts,
     notifications,
     unreadCount,
     analytics,
